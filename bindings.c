@@ -3428,6 +3428,15 @@ static int proc_meminfo_read(char *buf, size_t size, off_t offset,
 		} else if (startswith(line, "SUnreclaim")) {
 			snprintf(lbuf, 100, "SUnreclaim:     %8lu kB\n", 0UL);
 			printme = lbuf;
+		} else if (startswith(line, "Shmem:")) {
+			snprintf(lbuf, 100, "Shmem:          %8lu kB\n", 0UL);
+			printme = lbuf;
+		} else if (startswith(line, "ShmemHugePages")) {
+			snprintf(lbuf, 100, "ShmemHugePages: %8lu kB\n", 0UL);
+			printme = lbuf;
+		} else if (startswith(line, "ShmemPmdMapped")) {
+			snprintf(lbuf, 100, "ShmemPmdMapped: %8lu kB\n", 0UL);
+			printme = lbuf;
 		} else
 			printme = line;
 
