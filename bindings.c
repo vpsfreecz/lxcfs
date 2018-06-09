@@ -67,6 +67,7 @@ enum {
 	LXC_TYPE_PROC_DISKSTATS,
 	LXC_TYPE_PROC_SWAPS,
 	LXC_TYPE_PROC_LOADAVG,
+	LXC_TYPE_PROC_INT_LOADAVGS,
 };
 
 struct file_info {
@@ -97,7 +98,7 @@ struct cpuacct_usage {
 #define EXP_15		2037		/* 1/exp(5sec/15min) */
 #define LOAD_INT(x) ((x) >> FSHIFT)
 #define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
-/* 
+/*
  * This parameter is used for proc_loadavg_read().
  * 1 means use loadavg, 0 means not use.
  */
@@ -4643,7 +4644,7 @@ static int refresh_load(struct load_node *p, char *path)
 	p->last_pid = last_pid;
 
 	free(line);
-err_out:	
+err_out:
 	for (; i > 0; i--)
 		free(idbuf[i-1]);
 out:
@@ -4845,6 +4846,106 @@ int stop_load_daemon(pthread_t pid)
 	return 0;
 }
 
+static int proc_int_loadavgs_read(char *buf, size_t size, off_t offset,
+		struct fuse_file_info *fi)
+{
+	struct fuse_context *fc = fuse_get_context();
+	struct file_info *d = (struct file_info *)fi->fh;
+	pid_t initpid;
+	char *cg;
+	size_t total_len = 0, l;
+	char *cache = d->buf;
+	size_t cache_size = d->buflen;
+	int rv;
+
+	struct load_node *n;
+	int i, first_node;
+	unsigned long a, b, c;
+
+	if (offset) {
+		if (offset > d->size)
+			return -EINVAL;
+		if (!d->cached)
+			return 0;
+		int left = d->size - offset;
+		total_len = left > size ? size : left;
+		memcpy(buf, cache + offset, total_len);
+		return total_len;
+	}
+
+	initpid = lookup_initpid_in_store(fc->pid);
+	if (initpid <= 0)
+		initpid = fc->pid;
+	cg = get_pid_cgroup(initpid, "cpu");
+	if (!cg)
+		return -EPERM;
+
+	if (strncmp(cg, "/osctl/pool.", 12) == 0) {
+		free(cg);
+		return -EPERM;
+	}
+
+	for (i = 0; i < LOAD_SIZE; i++) {
+		pthread_mutex_lock(&load_hash[i].lock);
+		if (load_hash[i].next == NULL) {
+			pthread_mutex_unlock(&load_hash[i].lock);
+			continue;
+		}
+		n = load_hash[i].next;
+		first_node = 1;
+		while (n) {
+			a = n->avenrun[0] + (FIXED_1/200);
+			b = n->avenrun[1] + (FIXED_1/200);
+			c = n->avenrun[2] + (FIXED_1/200);
+
+			l = snprintf(cache, cache_size,
+				"%s %lu.%02lu %lu.%02lu %lu.%02lu %d/%d %d\n",
+				n->cg,
+				LOAD_INT(a), LOAD_FRAC(a),
+				LOAD_INT(b), LOAD_FRAC(b),
+				LOAD_INT(c), LOAD_FRAC(c),
+				n->run_pid, n->total_pid, n->last_pid);
+
+			if (l < 0) {
+				perror("Error writing to cache");
+				rv = 0;
+				goto err;
+			}
+			if (l >= cache_size) {
+				lxcfs_error("%s\n", "Internal error: truncated write to cache.");
+				rv = 0;
+				goto err;
+			}
+
+			cache += l;
+			cache_size -= l;
+			total_len += l;
+
+			n = n->next;
+
+			/* load_hash[i].lock locks only on the first node.*/
+			if (first_node == 1) {
+				first_node = 0;
+				pthread_mutex_unlock(&load_hash[i].lock);
+			}
+		}
+	}
+
+
+	d->cached = 1;
+	d->size = total_len;
+
+	if (total_len > size)
+		total_len = size;
+
+	memcpy(buf, d->buf, total_len);
+	rv = total_len;
+
+err:
+	free(cg);
+	return rv;
+}
+
 static off_t get_procfile_size(const char *which)
 {
 	FILE *f = fopen(which, "r");
@@ -4882,7 +4983,8 @@ int proc_getattr(const char *path, struct stat *sb)
 			strcmp(path, "/proc/stat") == 0 ||
 			strcmp(path, "/proc/diskstats") == 0 ||
 			strcmp(path, "/proc/swaps") == 0 ||
-			strcmp(path, "/proc/loadavg") == 0) {
+			strcmp(path, "/proc/loadavg") == 0 ||
+			strcmp(path, "/proc/.loadavgs") == 0) {
 		sb->st_size = 0;
 		sb->st_mode = S_IFREG | 00444;
 		sb->st_nlink = 1;
@@ -4927,6 +5029,8 @@ int proc_open(const char *path, struct fuse_file_info *fi)
 		type = LXC_TYPE_PROC_SWAPS;
 	else if (strcmp(path, "/proc/loadavg") == 0)
 		type = LXC_TYPE_PROC_LOADAVG;
+	else if (strcmp(path, "/proc/.loadavgs") == 0)
+		type = LXC_TYPE_PROC_INT_LOADAVGS;
 	if (type == -1)
 		return -ENOENT;
 
@@ -4986,6 +5090,8 @@ int proc_read(const char *path, char *buf, size_t size, off_t offset,
 		return proc_swaps_read(buf, size, offset, fi);
 	case LXC_TYPE_PROC_LOADAVG:
 		return proc_loadavg_read(buf, size, offset, fi);
+	case LXC_TYPE_PROC_INT_LOADAVGS:
+		return proc_int_loadavgs_read(buf, size, offset, fi);
 	default:
 		return -EINVAL;
 	}
