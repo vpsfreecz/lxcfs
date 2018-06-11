@@ -4768,6 +4768,33 @@ pthread_t load_daemon(int load_use)
 	loadavg = load_use;
 	return pid;
 }
+static size_t approx_int_loadavgs_size()
+{
+	int count = 0, i, first_node;
+	struct load_node *n;
+
+	for (i = 0; i < LOAD_SIZE; i++) {
+		pthread_mutex_lock(&load_hash[i].lock);
+		if (load_hash[i].next == NULL) {
+			pthread_mutex_unlock(&load_hash[i].lock);
+			continue;
+		}
+		n = load_hash[i].next;
+		first_node = 1;
+		while (n) {
+			count++;
+			n = n->next;
+
+			/* load_hash[i].lock locks only on the first node.*/
+			if (first_node == 1) {
+				first_node = 0;
+				pthread_mutex_unlock(&load_hash[i].lock);
+			}
+		}
+	}
+
+	return 256 * count;
+}
 
 /* Returns 0 on success. */
 int stop_load_daemon(pthread_t pid)
@@ -4983,7 +5010,11 @@ int proc_open(const char *path, struct fuse_file_info *fi)
 	memset(info, 0, sizeof(*info));
 	info->type = type;
 
-	info->buflen = get_procfile_size(path) + BUF_RESERVE_SIZE;
+	if (type == LXC_TYPE_PROC_INT_LOADAVGS)
+		info->buflen = approx_int_loadavgs_size() + BUF_RESERVE_SIZE;
+	else
+		info->buflen = get_procfile_size(path) + BUF_RESERVE_SIZE;
+
 	do {
 		info->buf = malloc(info->buflen);
 	} while (!info->buf);
