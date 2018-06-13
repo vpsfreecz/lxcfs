@@ -80,6 +80,11 @@ struct file_info {
 	int cached;
 };
 
+struct cpuacct_usage {
+	uint64_t user;
+	uint64_t system;
+};
+
 /* The function of hash table.*/
 #define LOAD_SIZE 100 /*the size of hash_table */
 #define FLUSH_TIME 5  /*the flush rate */
@@ -92,7 +97,7 @@ struct file_info {
 #define EXP_15		2037		/* 1/exp(5sec/15min) */
 #define LOAD_INT(x) ((x) >> FSHIFT)
 #define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
-/* 
+/*
  * This parameter is used for proc_loadavg_read().
  * 1 means use loadavg, 0 means not use.
  */
@@ -279,6 +284,7 @@ void load_free(void)
 		pthread_rwlock_destroy(&load_hash[i].rdlock);
 	}
 }
+
 /* Reserve buffer size to account for file size changes. */
 #define BUF_RESERVE_SIZE 512
 
@@ -3793,6 +3799,78 @@ static uint64_t get_reaper_age(pid_t pid)
 	return procage;
 }
 
+static int read_cpuacct_used_all(char *cg, char *cpuset, struct cpuacct_usage **return_usage)
+{
+
+	int cpucount = get_nprocs();
+	struct cpuacct_usage *cpu_usage;
+	int rv = 0, i, ret, read_pos = 0, read_cnt;
+	int cg_cpu;
+	uint64_t cg_user, cg_system;
+	int64_t ticks_per_sec;
+	char *usage_str = NULL;
+
+	ticks_per_sec = sysconf(_SC_CLK_TCK);
+
+	if (ticks_per_sec < 0 && errno == EINVAL) {
+		lxcfs_debug(
+		    "%s\n",
+		    "read_cpuacct_used_all failed to determine number of clock ticks "
+			"in a second");
+		return -1;
+	}
+
+	cpu_usage = malloc(sizeof(struct cpuacct_usage) * cpucount);
+	if (!cpu_usage)
+		return -ENOMEM;
+
+	if (!cgfs_get_value("cpuacct", cg, "cpuacct.usage_all", &usage_str)) {
+		rv = -1;
+		goto err;
+	}
+
+	if (sscanf(usage_str, "cpu user system\n%n", &read_cnt) != 0) {
+		lxcfs_error("read_cpuacct_used_all reading first line from "
+				"%s/cpuacct.usage_all failed.\n", cg);
+		rv = -1;
+		goto err;
+	}
+
+	read_pos += read_cnt;
+
+	for (i = 0; i < cpucount;) {
+		ret = sscanf(usage_str + read_pos, "%d %lu %lu\n%n", &cg_cpu, &cg_user,
+				&cg_system, &read_cnt);
+
+		if (ret == EOF) {
+			break;
+
+		} else if (ret != 3) {
+			lxcfs_error("proc_stat_read reading from %s/cpuacct.usage_all "
+					"failed.\n", cg);
+			rv = -1;
+			goto err;
+		}
+
+		read_pos += read_cnt;
+
+		if (!cpu_in_cpuset(i, cpuset))
+			continue;
+
+		cpu_usage[i].user = cg_user / 1000.0 / 1000 / 1000 * ticks_per_sec;
+		cpu_usage[i].system = cg_system / 1000.0 / 1000 / 1000 * ticks_per_sec;
+		i++;
+	}
+
+	*return_usage = cpu_usage;
+
+err:
+	if (usage_str)
+		free(usage_str);
+
+	return rv;
+}
+
 #define CPUALL_MAX_SIZE (BUF_RESERVE_SIZE / 2)
 static int proc_stat_read(char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
@@ -3812,6 +3890,7 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 	char *cache = d->buf + CPUALL_MAX_SIZE;
 	size_t cache_size = d->buflen - CPUALL_MAX_SIZE;
 	FILE *f = NULL;
+	struct cpuacct_usage *cg_cpu_usage = NULL;
 
 	if (offset){
 		if (offset > d->size)
@@ -3836,6 +3915,12 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 	if (!cpuset)
 		goto err;
 
+	/* Read cpuacct.usage_all for all CPUs */
+	if (read_cpuacct_used_all(cg, cpuset, &cg_cpu_usage) < 0) {
+		lxcfs_error("%s\n", "proc_stat_read failed to read from cpuacct.");
+		goto err;
+	}
+
 	f = fopen("/proc/stat", "r");
 	if (!f)
 		goto err;
@@ -3850,7 +3935,7 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 		ssize_t l;
 		int cpu;
 		char cpu_char[10]; /* That's a lot of cores */
-		char *c;
+		uint64_t all_used, cg_used, new_idle;
 
 		if (strlen(line) == 0)
 			continue;
@@ -3879,10 +3964,36 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 			continue;
 		curcpu ++;
 
-		c = strchr(line, ' ');
-		if (!c)
+		if (sscanf(line, "%*s %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu",
+			   &user,
+			   &nice,
+			   &system,
+			   &idle,
+			   &iowait,
+			   &irq,
+			   &softirq,
+			   &steal,
+			   &guest,
+			   &guest_nice) != 10)
 			continue;
-		l = snprintf(cache, cache_size, "cpu%d%s", curcpu, c);
+
+		all_used = user + nice + system + iowait + irq + softirq + steal + guest + guest_nice;
+		cg_used = cg_cpu_usage[curcpu].user + cg_cpu_usage[curcpu].system;
+
+		if (all_used > cg_used) {
+			new_idle = idle + (all_used - cg_used);
+
+		} else {
+			lxcfs_error("cpu%d from %s has weird cpu time: %lu in /proc/stat, "
+					"%lu in cpuacct.usage_all; unable to determine idle time\n",
+					curcpu, cg, all_used, cg_used);
+			new_idle = idle;
+		}
+
+		l = snprintf(cache, cache_size, "cpu%d %lu 0 %lu %lu 0 0 0 0 0 0\n",
+				curcpu, cg_cpu_usage[curcpu].user, cg_cpu_usage[curcpu].system,
+				new_idle);
+
 		if (l < 0) {
 			perror("Error writing to cache");
 			rv = 0;
@@ -3899,28 +4010,9 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 		cache_size -= l;
 		total_len += l;
 
-		if (sscanf(line, "%*s %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu",
-			   &user,
-			   &nice,
-			   &system,
-			   &idle,
-			   &iowait,
-			   &irq,
-			   &softirq,
-			   &steal,
-			   &guest,
-			   &guest_nice) != 10)
-			continue;
-		user_sum += user;
-		nice_sum += nice;
-		system_sum += system;
-		idle_sum += idle;
-		iowait_sum += iowait;
-		irq_sum += irq;
-		softirq_sum += softirq;
-		steal_sum += steal;
-		guest_sum += guest;
-		guest_nice_sum += guest_nice;
+		user_sum += cg_cpu_usage[curcpu].user;
+		system_sum += cg_cpu_usage[curcpu].system;
+		idle_sum += new_idle;
 	}
 
 	cache = d->buf;
@@ -3958,6 +4050,10 @@ static int proc_stat_read(char *buf, size_t size, off_t offset,
 err:
 	if (f)
 		fclose(f);
+
+	if (cg_cpu_usage)
+		free(cg_cpu_usage);
+
 	free(line);
 	free(cpuset);
 	free(cg);
@@ -4480,7 +4576,7 @@ static int refresh_load(struct load_node *p, char *path)
 	p->last_pid = last_pid;
 
 	free(line);
-err_out:	
+err_out:
 	for (; i > 0; i--)
 		free(idbuf[i-1]);
 out:
