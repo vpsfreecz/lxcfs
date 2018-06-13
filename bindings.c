@@ -102,6 +102,7 @@ struct cpuacct_usage {
  * 1 means use loadavg, 0 means not use.
  */
 static int loadavg = 0;
+static volatile sig_atomic_t loadavg_stop = 0;
 static int calc_hash(char *name)
 {
 	unsigned int hash = 0;
@@ -252,7 +253,7 @@ static struct load_node *del_node(struct load_node *n, int locate)
 	return g;
 }
 
-void load_free(void)
+static void load_free(void)
 {
 	int i;
 	struct load_node *f, *p;
@@ -4605,6 +4606,9 @@ void *load_begin(void *arg)
 	clock_t time1, time2;
 
 	while (1) {
+		if (loadavg_stop == 1)
+			return NULL;
+
 		time1 = clock();
 		for (i = 0; i < LOAD_SIZE; i++) {
 			pthread_mutex_lock(&load_hash[i].lock);
@@ -4641,6 +4645,10 @@ out:					f = f->next;
 				}
 			}
 		}
+
+		if (loadavg_stop == 1)
+			return NULL;
+
 		time2 = clock();
 		usleep(FLUSH_TIME * 1000000 - (int)((time2 - time1) * 1000000 / CLOCKS_PER_SEC));
 	}
@@ -4758,6 +4766,26 @@ pthread_t load_daemon(int load_use)
 	/* use loadavg, here loadavg = 1*/
 	loadavg = load_use;
 	return pid;
+}
+
+/* Returns 0 on success. */
+int stop_load_daemon(pthread_t pid)
+{
+	int s;
+
+	/* Signal the thread to gracefully stop */
+	loadavg_stop = 1;
+
+	s = pthread_join(pid, NULL); /* Make sure sub thread has been canceled. */
+	if (s != 0) {
+		lxcfs_error("%s\n", "stop_load_daemon error: failed to join");
+		return -1;
+	}
+
+	load_free();
+	loadavg_stop = 0;
+
+	return 0;
 }
 
 static off_t get_procfile_size(const char *which)
