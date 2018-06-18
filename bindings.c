@@ -1219,6 +1219,7 @@ static void write_task_init_pid_exit(int sock, pid_t target)
 		close(fd);
 		_exit(1);
 	}
+	lxcfs_debug("clone(): write_task_init_pid_exit(x, %u)\n", target);
 	pid = clone(send_creds_clone_wrapper, stack + stack_size, SIGCHLD, &sock);
 	if (pid < 0)
 		_exit(1);
@@ -1257,6 +1258,7 @@ static pid_t get_init_pid_for_task(pid_t task)
 		return -1;
 	}
 
+	lxcfs_debug("fork(): get_init_pid_for_task(%u)\n", task);
 	pid = fork();
 	if (pid < 0)
 		goto out;
@@ -2435,6 +2437,7 @@ static void pid_to_ns_wrapper(int sock, pid_t tpid)
 	size_t stack_size = sysconf(_SC_PAGESIZE);
 	void *stack = alloca(stack_size);
 
+	lxcfs_debug("clone(): pid_to_ns_wrapper(%u)\n", tpid);
 	cpid = clone(pid_ns_clone_wrapper, stack + stack_size, SIGCHLD, &args);
 	if (cpid < 0)
 		_exit(1);
@@ -2483,6 +2486,7 @@ bool do_read_pids(pid_t tpid, const char *contrl, const char *cg, const char *fi
 		return false;
 	}
 
+	lxcfs_debug("fork(): do_read_pids(%u, %s, %s, %s)\n", tpid, contrl, cg, file);
 	cpid = fork();
 	if (cpid == -1)
 		goto out;
@@ -2668,6 +2672,7 @@ static void pid_from_ns_wrapper(int sock, pid_t tpid)
 	size_t stack_size = sysconf(_SC_PAGESIZE);
 	void *stack = alloca(stack_size);
 
+	lxcfs_debug("clone(): pid_from_ns_wrapper(%u)\n", tpid);
 	cpid = clone(pid_ns_clone_wrapper, stack + stack_size, SIGCHLD, &args);
 	if (cpid < 0)
 		_exit(1);
@@ -2793,6 +2798,7 @@ static bool do_write_pids(pid_t tpid, uid_t tuid, const char *contrl, const char
 		goto out;
 	}
 
+	lxcfs_debug("fork(): do_write_pids(%u, %u, %s, %s, %s)\n", tpid, tuid, contrl, cg, file);
 	cpid = fork();
 	if (cpid == -1)
 		goto out;
