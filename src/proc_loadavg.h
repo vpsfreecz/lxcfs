@@ -28,6 +28,8 @@ __visible extern int stop_load_daemon(pthread_t pid);
 
 extern int proc_loadavg_read(char *buf, size_t size, off_t offset, struct fuse_file_info *fi);
 extern int calc_hash(const char *name);
+extern off_t approx_int_loadavgs_size();
+extern int proc_int_loadavgs_read(char *buf, size_t size, off_t offset, struct fuse_file_info *fi);
 
 #endif /* __LXCFS_PROC_LOADAVG_FUSE_H */
 

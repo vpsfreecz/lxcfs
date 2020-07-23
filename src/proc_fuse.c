@@ -102,8 +102,9 @@ __lxcfs_fuse_ops int proc_getattr(const char *path, struct stat *sb)
 	    strcmp(path, "/proc/stat")		== 0 ||
 	    strcmp(path, "/proc/diskstats")	== 0 ||
 	    strcmp(path, "/proc/swaps")		== 0 ||
-	    strcmp(path, "/proc/loadavg")	== 0) {
-		sb->st_size = 4096;
+	    strcmp(path, "/proc/loadavg")	== 0 ||
+	    strcmp(path, "/proc/.loadavgs")	== 0) {
+		sb->st_size = 0;
 		sb->st_mode = S_IFREG | 00444;
 		sb->st_nlink = 1;
 		return 0;
@@ -166,6 +167,8 @@ __lxcfs_fuse_ops int proc_open(const char *path, struct fuse_file_info *fi)
 		type = LXC_TYPE_PROC_SWAPS;
 	else if (strcmp(path, "/proc/loadavg") == 0)
 		type = LXC_TYPE_PROC_LOADAVG;
+	else if (strcmp(path, "/proc/.loadavgs") == 0)
+		type = LXC_TYPE_PROC_INT_LOADAVGS;
 	if (type == -1)
 		return -ENOENT;
 
@@ -175,7 +178,10 @@ __lxcfs_fuse_ops int proc_open(const char *path, struct fuse_file_info *fi)
 
 	info->type = type;
 
-	info->buflen = get_procfile_size(path) + BUF_RESERVE_SIZE;
+	if (type == LXC_TYPE_PROC_INT_LOADAVGS)
+		info->buflen = approx_int_loadavgs_size() + BUF_RESERVE_SIZE;
+	else
+		info->buflen = get_procfile_size(path) + BUF_RESERVE_SIZE;
 
 	info->buf = zalloc(info->buflen);
 	if (!info->buf)
@@ -1445,6 +1451,9 @@ __lxcfs_fuse_ops int proc_read(const char *path, char *buf, size_t size,
 
 		return read_file_fuse_with_offset(LXC_TYPE_PROC_LOADAVG_PATH,
 						  buf, size, offset, f);
+	case LXC_TYPE_PROC_INT_LOADAVGS:
+		if (liblxcfs_functional())
+			return proc_int_loadavgs_read(buf, size, offset, fi);
 	}
 
 	return -EINVAL;
