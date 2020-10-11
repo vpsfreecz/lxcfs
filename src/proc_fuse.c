@@ -96,8 +96,7 @@ __lxcfs_fuse_ops int proc_getattr(const char *path, struct stat *sb)
 		return 0;
 	}
 
-	if (strcmp(path, "/proc/meminfo")	== 0 ||
-	    strcmp(path, "/proc/cpuinfo")	== 0 ||
+	if (strcmp(path, "/proc/cpuinfo")	== 0 ||
 	    strcmp(path, "/proc/uptime")	== 0 ||
 	    strcmp(path, "/proc/stat")		== 0 ||
 	    strcmp(path, "/proc/diskstats")	== 0 ||
@@ -120,7 +119,6 @@ __lxcfs_fuse_ops int proc_readdir(const char *path, void *buf,
 	if (DIR_FILLER(filler, buf, ".",		NULL, 0) != 0 ||
 	    DIR_FILLER(filler, buf, "..",		NULL, 0) != 0 ||
 	    DIR_FILLER(filler, buf, "cpuinfo",	NULL, 0) != 0 ||
-	    DIR_FILLER(filler, buf, "meminfo",	NULL, 0) != 0 ||
 	    DIR_FILLER(filler, buf, "stat",		NULL, 0) != 0 ||
 	    DIR_FILLER(filler, buf, "uptime",	NULL, 0) != 0 ||
 	    DIR_FILLER(filler, buf, "diskstats",	NULL, 0) != 0 ||
@@ -153,9 +151,7 @@ __lxcfs_fuse_ops int proc_open(const char *path, struct fuse_file_info *fi)
 	__do_free struct file_info *info = NULL;
 	int type = -1;
 
-	if (strcmp(path, "/proc/meminfo") == 0)
-		type = LXC_TYPE_PROC_MEMINFO;
-	else if (strcmp(path, "/proc/cpuinfo") == 0)
+	if (strcmp(path, "/proc/cpuinfo") == 0)
 		type = LXC_TYPE_PROC_CPUINFO;
 	else if (strcmp(path, "/proc/uptime") == 0)
 		type = LXC_TYPE_PROC_UPTIME;
