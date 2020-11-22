@@ -100,7 +100,6 @@ __lxcfs_fuse_ops int proc_getattr(const char *path, struct stat *sb)
 	    strcmp(path, "/proc/uptime")	== 0 ||
 	    strcmp(path, "/proc/stat")		== 0 ||
 	    strcmp(path, "/proc/diskstats")	== 0 ||
-	    strcmp(path, "/proc/swaps")		== 0 ||
 	    strcmp(path, "/proc/loadavg")	== 0 ||
 	    strcmp(path, "/proc/.loadavgs")	== 0) {
 		sb->st_size = 0;
@@ -122,7 +121,6 @@ __lxcfs_fuse_ops int proc_readdir(const char *path, void *buf,
 	    DIR_FILLER(filler, buf, "stat",		NULL, 0) != 0 ||
 	    DIR_FILLER(filler, buf, "uptime",	NULL, 0) != 0 ||
 	    DIR_FILLER(filler, buf, "diskstats",	NULL, 0) != 0 ||
-	    DIR_FILLER(filler, buf, "swaps",	NULL, 0) != 0 ||
 	    DIR_FILLER(filler, buf, "loadavg",	NULL, 0) != 0)
 		return -EINVAL;
 
@@ -159,8 +157,6 @@ __lxcfs_fuse_ops int proc_open(const char *path, struct fuse_file_info *fi)
 		type = LXC_TYPE_PROC_STAT;
 	else if (strcmp(path, "/proc/diskstats") == 0)
 		type = LXC_TYPE_PROC_DISKSTATS;
-	else if (strcmp(path, "/proc/swaps") == 0)
-		type = LXC_TYPE_PROC_SWAPS;
 	else if (strcmp(path, "/proc/loadavg") == 0)
 		type = LXC_TYPE_PROC_LOADAVG;
 	else if (strcmp(path, "/proc/.loadavgs") == 0)
